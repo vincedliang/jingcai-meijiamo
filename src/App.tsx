@@ -27,15 +27,15 @@ import type { FeaturedMatch, Friend, Match, Pick, PickChoice } from "./types";
 
 const MAX_DAILY_PICKS = 2;
 const APP_PASSCODE = import.meta.env.VITE_APP_PASSCODE ?? "";
-const LOGIN_EMAILS_BY_NAME: Record<string, string> = {
-  "王森": "wang-sen@jingcai-meijiamo.com",
-  "杨宇恒": "yang-yuheng@jingcai-meijiamo.com",
-  "王晓明": "wang-xiaoming@jingcai-meijiamo.com",
-  "毕艺馨": "bi-yixin@jingcai-meijiamo.com",
-  "赵文宣": "zhao-wenxuan@jingcai-meijiamo.com",
-  "梁东旭": "liang-dongxu@jingcai-meijiamo.com"
-};
+const APP_PASSCODE_HASH =
+  import.meta.env.VITE_APP_PASSCODE_HASH ?? "ef797c8118f02dfb649607dd5d3f8c7623048c9c063d532cc95c5ed7a898a64f";
 const EXCLUDED_PROFILE_IDS = new Set(["10000000-0000-0000-0000-000000000003"]);
+
+async function sha256Hex(value: string) {
+  const data = new TextEncoder().encode(value);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function friendDefaults(displayName: string, fallbackIndex: number) {
   return FRIENDS.find((friend) => friend.displayName === displayName) ?? FRIENDS[fallbackIndex % FRIENDS.length];
@@ -209,19 +209,12 @@ export function App() {
       return;
     }
 
-    const email = LOGIN_EMAILS_BY_NAME[selectedLoginUser.displayName];
-    if (!email) {
-      alert("登录失败，请检查用户配置。");
-      return;
-    }
-
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error || data.user?.id !== selectedUserId) {
-      await supabase.auth.signOut();
+    const hashedPassword = await sha256Hex(password);
+    if (!APP_PASSCODE_HASH || hashedPassword !== APP_PASSCODE_HASH) {
       alert("登录失败，请检查口令。");
       return;
     }
-    setActiveUserId(data.user.id);
+    setActiveUserId(selectedUserId);
     setPassword("");
   }
 
