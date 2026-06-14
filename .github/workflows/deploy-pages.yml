@@ -41,7 +41,6 @@ jobs:
           VITE_SUPABASE_URL: https://jxczamsgzvuxbjkpoblt.supabase.co
           VITE_SUPABASE_ANON_KEY: sb_publishable_7TePX6_9w7OMKEhrxRji9w_Oo0MMWcY
           VITE_DEMO_MODE: "false"
-          VITE_APP_PASSCODE: ${{ secrets.VITE_APP_PASSCODE }}
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

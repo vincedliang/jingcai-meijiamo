@@ -27,6 +27,14 @@ import type { FeaturedMatch, Friend, Match, Pick, PickChoice } from "./types";
 
 const MAX_DAILY_PICKS = 2;
 const APP_PASSCODE = import.meta.env.VITE_APP_PASSCODE ?? "";
+const LOGIN_EMAILS_BY_NAME: Record<string, string> = {
+  "王森": "wang-sen@jingcai-meijiamo.com",
+  "杨宇恒": "yang-yuheng@jingcai-meijiamo.com",
+  "王晓明": "wang-xiaoming@jingcai-meijiamo.com",
+  "毕艺馨": "bi-yixin@jingcai-meijiamo.com",
+  "赵文宣": "zhao-wenxuan@jingcai-meijiamo.com",
+  "梁东旭": "liang-dongxu@jingcai-meijiamo.com"
+};
 const EXCLUDED_PROFILE_IDS = new Set(["10000000-0000-0000-0000-000000000003"]);
 
 function friendDefaults(displayName: string, fallbackIndex: number) {
@@ -191,11 +199,29 @@ export function App() {
       return;
     }
 
-    if (!APP_PASSCODE || password !== APP_PASSCODE) {
+    if (APP_PASSCODE) {
+      if (password !== APP_PASSCODE) {
+        alert("登录失败，请检查口令。");
+        return;
+      }
+      setActiveUserId(selectedUserId);
+      setPassword("");
+      return;
+    }
+
+    const email = LOGIN_EMAILS_BY_NAME[selectedLoginUser.displayName];
+    if (!email) {
+      alert("登录失败，请检查用户配置。");
+      return;
+    }
+
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error || data.user?.id !== selectedUserId) {
+      await supabase.auth.signOut();
       alert("登录失败，请检查口令。");
       return;
     }
-    setActiveUserId(selectedUserId);
+    setActiveUserId(data.user.id);
     setPassword("");
   }
 
@@ -434,6 +460,7 @@ export function App() {
             if (isDemoMode) {
               setActiveUserId(event.target.value);
             } else {
+              void supabase?.auth.signOut();
               setActiveUserId(null);
             }
           }}
@@ -448,6 +475,7 @@ export function App() {
             <button
               className="secondaryButton"
               onClick={() => {
+                void supabase?.auth.signOut();
                 setActiveUserId(null);
                 setPassword("");
               }}
