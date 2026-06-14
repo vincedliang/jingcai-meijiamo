@@ -103,17 +103,16 @@ describe("prediction rules", () => {
     expect(getPreviousMatchDay(matches, new Date("2026-06-12T23:30:00-04:00"), featuredIds)?.matches.map((match) => match.id)).toEqual(["m2"]);
   });
 
-  it("lets admins manage a featured match until that match kicks off", () => {
+  it("lets admins manage scheduled featured matches at any time", () => {
     const matches = [
       { ...baseMatch, id: "m1", matchNo: 1, status: "scheduled" as const, winner: null, kickoffAt: "2026-06-13T08:00:00+08:00" },
-      { ...baseMatch, id: "m2", matchNo: 2, status: "scheduled" as const, winner: null, kickoffAt: "2026-06-13T11:00:00+08:00" }
+      { ...baseMatch, id: "m2", matchNo: 2, status: "finished" as const, winner: "home" as const, kickoffAt: "2026-06-13T11:00:00+08:00" }
     ];
 
-    expect(canManageFeaturedMatches(matches, new Date("2026-06-13T07:59:00+08:00"))).toBe(true);
-    expect(canManageFeaturedMatch(matches[0], new Date("2026-06-13T08:00:00+08:00"))).toBe(false);
-    expect(canManageFeaturedMatch(matches[1], new Date("2026-06-13T08:00:00+08:00"))).toBe(true);
-    expect(canManageFeaturedMatches(matches, new Date("2026-06-13T08:00:00+08:00"))).toBe(true);
-    expect(canManageFeaturedMatches(matches, new Date("2026-06-13T11:00:00+08:00"))).toBe(false);
+    expect(canManageFeaturedMatches(matches)).toBe(true);
+    expect(canManageFeaturedMatch(matches[0])).toBe(true);
+    expect(canManageFeaturedMatch(matches[1])).toBe(false);
+    expect(canManageFeaturedMatches(matches)).toBe(true);
   });
 
   it("formats Eastern and Beijing times separately", () => {

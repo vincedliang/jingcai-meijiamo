@@ -14,14 +14,6 @@ begin
     raise exception 'Only two featured matches are allowed per match day';
   end if;
 
-  if now() >= (
-    select target_match.kickoff_at
-    from public.matches target_match
-    where target_match.id = new.match_id
-  ) then
-    raise exception 'Featured matches must be selected before that match starts';
-  end if;
-
   if exists (
     select 1
     from public.matches target_match
@@ -38,14 +30,6 @@ $$;
 create or replace function public.prevent_late_featured_match_delete()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  if now() >= (
-    select target_match.kickoff_at
-    from public.matches target_match
-    where target_match.id = old.match_id
-  ) then
-    raise exception 'Featured matches cannot be changed after that match starts';
-  end if;
-
   return old;
 end;
 $$;

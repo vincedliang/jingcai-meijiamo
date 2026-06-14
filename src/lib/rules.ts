@@ -165,10 +165,10 @@ export function userDailyPickCount(userId: string, picks: Pick[], matches: Match
   return picks.filter((pick) => pick.userId === userId && matchIds.has(pick.matchId)).length;
 }
 
-export function canManageFeaturedMatch(match: Match, now = new Date()) {
-  return match.status === "scheduled" && now.getTime() < new Date(match.kickoffAt).getTime();
+export function canManageFeaturedMatch(match: Match) {
+  return match.status === "scheduled";
 }
 
-export function canManageFeaturedMatches(matchesForDay: Match[], now = new Date()) {
-  return matchesForDay.some((match) => canManageFeaturedMatch(match, now));
+export function canManageFeaturedMatches(matchesForDay: Match[]) {
+  return matchesForDay.some((match) => canManageFeaturedMatch(match));
 }

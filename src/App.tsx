@@ -267,7 +267,7 @@ export function App() {
   }
 
   async function toggleFeaturedMatch(match: Match) {
-    if (!isCurrentUserAdmin || !effectiveUserId || !canManageFeaturedMatch(match, now)) return;
+    if (!isCurrentUserAdmin || !effectiveUserId || !canManageFeaturedMatch(match)) return;
     const selected = featuredIds.has(match.id);
     const sameDayFeatured = todayMatches.filter((item) => featuredIds.has(item.id));
     if (!selected && sameDayFeatured.length >= MAX_DAILY_PICKS) return;
@@ -514,9 +514,6 @@ export function App() {
           </div>
           <span className="pill">{todayFeaturedCount}/2 场竞猜</span>
         </div>
-        {isCurrentUserAdmin && !todayMatches.some((match) => canManageFeaturedMatch(match, now)) ? (
-          <p className="muted deadlineNote">本比赛日剩余比赛均已开赛，管理员不能再调整竞猜场次。</p>
-        ) : null}
         <div className="matchList">
           {todayMatches.map((match) => (
               <MatchCard
@@ -528,7 +525,7 @@ export function App() {
               selectedForPick={featuredIds.has(match.id)}
               isAdmin={isCurrentUserAdmin}
               canFeatureMore={todayFeaturedCount < MAX_DAILY_PICKS}
-              canManageFeatured={canManageFeaturedMatch(match, now)}
+              canManageFeatured={canManageFeaturedMatch(match)}
               savingFeatured={savingFeaturedId === match.id}
               savingResult={savingResultId === match.id}
               dailyFull={todayPickCount >= MAX_DAILY_PICKS}
