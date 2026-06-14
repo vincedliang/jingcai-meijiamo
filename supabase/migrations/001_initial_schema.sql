@@ -1,7 +1,7 @@
 create extension if not exists "pgcrypto";
 
 create type pick_choice as enum ('home', 'draw', 'away');
-create type match_phase as enum ('group', 'round16', 'quarter', 'semi', 'third', 'final');
+create type match_phase as enum ('group', 'round32', 'round16', 'quarter', 'semi', 'third', 'final');
 create type match_status as enum ('scheduled', 'live', 'finished');
 
 create table public.profiles (
@@ -56,8 +56,7 @@ create table public.result_overrides (
   created_at timestamptz not null default now()
 );
 
-create view public.standings as
-select
+create view public.standings as select
   p.id as user_id,
   p.display_name,
   count(pk.id) filter (where m.status = 'finished' and m.winner is not null) as played,
@@ -131,11 +130,7 @@ create policy "overrides visible to signed in users" on public.result_overrides
   for select to authenticated using (true);
 
 create or replace function public.limit_featured_matches_per_day()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
+returns trigger language plpgsql security definer set search_path = public as $$
 declare
   featured_count int;
 begin
@@ -151,12 +146,20 @@ begin
   end if;
 
   if now() >= (
-    select min(day_match.kickoff_at)
-    from public.matches day_match
-    join public.matches target_match on target_match.id = new.match_id
-    where (day_match.kickoff_at at time zone 'America/New_York')::date = (target_match.kickoff_at at time zone 'America/New_York')::date
+    select target_match.kickoff_at
+    from public.matches target_match
+    where target_match.id = new.match_id
   ) then
-    raise exception 'Featured matches must be selected before the first match starts on the Eastern Time match day';
+    raise exception 'Featured matches must be selected before that match starts';
+  end if;
+
+  if exists (
+    select 1
+    from public.matches target_match
+    where target_match.id = new.match_id
+      and target_match.status <> 'scheduled'
+  ) then
+    raise exception 'Only scheduled matches can be selected as featured matches';
   end if;
 
   return new;
@@ -168,19 +171,14 @@ before insert on public.featured_matches
 for each row execute function public.limit_featured_matches_per_day();
 
 create or replace function public.prevent_late_featured_match_delete()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
+returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if now() >= (
-    select min(day_match.kickoff_at)
-    from public.matches day_match
-    join public.matches target_match on target_match.id = old.match_id
-    where (day_match.kickoff_at at time zone 'America/New_York')::date = (target_match.kickoff_at at time zone 'America/New_York')::date
+    select target_match.kickoff_at
+    from public.matches target_match
+    where target_match.id = old.match_id
   ) then
-    raise exception 'Featured matches cannot be changed after the first match starts on the Eastern Time match day';
+    raise exception 'Featured matches cannot be changed after that match starts';
   end if;
 
   return old;
@@ -192,11 +190,7 @@ before delete on public.featured_matches
 for each row execute function public.prevent_late_featured_match_delete();
 
 create or replace function public.apply_latest_override()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
+returns trigger language plpgsql security definer set search_path = public as $$
 begin
   update public.matches
   set

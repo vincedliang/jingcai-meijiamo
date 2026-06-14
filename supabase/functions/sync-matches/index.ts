@@ -90,6 +90,7 @@ function normalizeStatus(status?: string | null) {
 
 function normalizePhase(phase?: string | null) {
   const value = (phase ?? "group").toLowerCase();
+  if (value.includes("32")) return "round32";
   if (value.includes("16")) return "round16";
   if (value.includes("quarter")) return "quarter";
   if (value.includes("semi")) return "semi";

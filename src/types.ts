@@ -1,5 +1,5 @@
 export type PickChoice = "home" | "draw" | "away";
-export type MatchPhase = "group" | "round16" | "quarter" | "semi" | "third" | "final";
+export type MatchPhase = "group" | "round32" | "round16" | "quarter" | "semi" | "third" | "final";
 export type MatchStatus = "scheduled" | "live" | "finished";
 
 export interface Friend {

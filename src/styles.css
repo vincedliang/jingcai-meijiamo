@@ -170,6 +170,30 @@ input {
   font-weight: 800;
 }
 
+.loginStatus {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(11, 127, 105, 0.18);
+  border-radius: 8px;
+  background: #eef8f4;
+  color: #12352d;
+  font-weight: 800;
+}
+
+.secondaryButton {
+  min-height: 36px;
+  border: 1px solid rgba(11, 127, 105, 0.28);
+  border-radius: 8px;
+  background: #fff;
+  color: #0b6656;
+  font-weight: 800;
+  padding: 0 12px;
+}
+
 .ranking {
   color: #fff;
   background: linear-gradient(135deg, #11624e, #1d8371 52%, #f0b429);
@@ -299,6 +323,16 @@ input {
   color: #fff;
   border-color: #d94f45;
   background: #d94f45;
+}
+
+.resultButton {
+  border-color: rgba(11, 127, 105, 0.28);
+  color: #0b6656;
+}
+
+.resultEdit {
+  width: 100%;
+  margin: 0 0 12px;
 }
 
 .adminToggle:disabled {

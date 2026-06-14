@@ -1,13 +1,13 @@
 import { Check, Lock, Music, Music2, ShieldCheck, Trophy, VolumeX } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import heroMatch from "./assets/worldcup-core-visual.jpg";
-import { FIFA_SCORES_FIXTURES_URL } from "./config/sources";
 import { DEMO_FEATURED_MATCHES, DEMO_MATCHES, DEMO_PICKS } from "./data/demoMatches";
 import { FRIENDS } from "./data/friends";
+import { getFifaKnockoutTeamUpdates } from "./lib/fifaTeamSync";
 import {
   calculateStandings,
   canPick,
-  canManageFeaturedMatches,
+  canManageFeaturedMatch,
+  canRecordResult,
   choiceLabel,
   choicesForMatch,
   easternDateKey,
@@ -26,6 +26,22 @@ import { isDemoMode, supabase } from "./lib/supabase";
 import type { FeaturedMatch, Friend, Match, Pick, PickChoice } from "./types";
 
 const MAX_DAILY_PICKS = 2;
+const APP_PASSCODE = import.meta.env.VITE_APP_PASSCODE ?? "";
+const EXCLUDED_PROFILE_IDS = new Set(["10000000-0000-0000-0000-000000000003"]);
+
+function friendDefaults(displayName: string, fallbackIndex: number) {
+  return FRIENDS.find((friend) => friend.displayName === displayName) ?? FRIENDS[fallbackIndex % FRIENDS.length];
+}
+
+function remapUserIdToRemote(userId: string | null, remoteFriends: Friend[]) {
+  if (!userId) return null;
+  if (remoteFriends.some((friend) => friend.id === userId)) return userId;
+
+  const localFriend = FRIENDS.find((friend) => friend.id === userId);
+  if (!localFriend) return null;
+
+  return remoteFriends.find((friend) => friend.displayName === localFriend.displayName)?.id ?? null;
+}
 
 export function App() {
   const [friends, setFriends] = useState<Friend[]>(FRIENDS);
@@ -35,23 +51,27 @@ export function App() {
   const [matches, setMatches] = useState<Match[]>(DEMO_MATCHES);
   const [picks, setPicks] = useState<Pick[]>([...DEMO_PICKS]);
   const [featuredMatches, setFeaturedMatches] = useState<FeaturedMatch[]>([...DEMO_FEATURED_MATCHES]);
-  const [musicOn, setMusicOn] = useState(() => localStorage.getItem("musicOn") === "true");
+  const [musicOn, setMusicOn] = useState(() => localStorage.getItem("musicOn") !== "false");
   const [lastLocked, setLastLocked] = useState<string | null>(null);
+  const [savingFeaturedId, setSavingFeaturedId] = useState<string | null>(null);
+  const [savingResultId, setSavingResultId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const lockAudioRef = useRef<HTMLAudioElement>(null);
+  const lastTeamSyncRef = useRef(0);
 
   const now = new Date();
-  const effectiveUserId = activeUserId ?? selectedUserId;
+  const effectiveUserId = isDemoMode ? selectedUserId : activeUserId;
   const selectedUser = friends.find((friend) => friend.id === effectiveUserId) ?? friends.find((friend) => friend.id === selectedUserId) ?? friends[0];
-  const isCurrentUserAdmin = Boolean(selectedUser.isAdmin);
-  const todayMatches = getTodayMatches(matches, now);
-  const todayKey = getCurrentMatchDateKey(matches, now);
-  const canManageTodayFeatured = canManageFeaturedMatches(todayMatches, now);
+  const selectedLoginUser = friends.find((friend) => friend.id === selectedUserId) ?? selectedUser;
+  const selectedUserLoggedIn = activeUserId === selectedUserId;
+  const isCurrentUserAdmin = Boolean(effectiveUserId && selectedUser.isAdmin);
   const featuredIds = new Set(featuredMatches.map((featured) => featured.matchId));
+  const todayMatches = getTodayMatches(matches, now, featuredIds);
+  const todayKey = getCurrentMatchDateKey(matches, now, featuredIds);
   const todayFeaturedCount = todayMatches.filter((match) => featuredIds.has(match.id)).length;
   const todayPickCount = effectiveUserId ? userDailyPickCount(effectiveUserId, picks as Pick[], matches, todayKey) : 0;
   const standings = useMemo(() => calculateStandings(friends, matches, picks as Pick[]), [friends, matches, picks]);
-  const previousDay = getPreviousMatchDay(matches, now);
+  const previousDay = getPreviousMatchDay(matches, now, featuredIds);
 
   useEffect(() => {
     if (isDemoMode || !supabase) return;
@@ -66,14 +86,24 @@ export function App() {
       ]);
 
       if (profiles?.length) {
-        setFriends(profiles.map((profile, index) => ({
-          id: profile.id,
-          displayName: profile.display_name,
-          isAdmin: Boolean(profile.is_admin),
-          color: FRIENDS[index % FRIENDS.length].color
-        })));
+        const remoteFriends = profiles.filter((profile) => !EXCLUDED_PROFILE_IDS.has(profile.id)).map((profile, index) => {
+          const defaults = friendDefaults(profile.display_name, index);
+          return {
+            id: profile.id,
+            displayName: profile.display_name,
+            isAdmin: Boolean(profile.is_admin),
+            color: defaults.color
+          };
+        });
+        setFriends(remoteFriends);
+        setSelectedUserId((current) => (
+          remapUserIdToRemote(current, remoteFriends)
+            ?? remoteFriends[0]?.id
+            ?? current
+        ));
+        setActiveUserId((current) => remapUserIdToRemote(current, remoteFriends));
       }
-      if (remoteMatches?.length) setMatches(remoteMatches.map(fromMatchRow));
+      if (remoteMatches?.length) setMatches(mergeMatchesWithFallback(remoteMatches.map(fromMatchRow)));
       if (remotePicks) setPicks(remotePicks.map(fromPickRow));
       if (remoteFeatured) setFeaturedMatches(remoteFeatured.map(fromFeaturedMatchRow));
     }
@@ -92,20 +122,81 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!musicOn) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.volume = 0.45;
+
+    const play = () => {
+      void audio.play().catch(() => undefined);
+    };
+    play();
+
+    window.addEventListener("pointerdown", play, { once: true });
+    window.addEventListener("touchstart", play, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", play);
+      window.removeEventListener("touchstart", play);
+    };
+  }, [musicOn]);
+
+  useEffect(() => {
+    if (isDemoMode || !supabase) return;
+    const client = supabase;
+    if (!matches.some((match) => match.phase !== "group" && hasTbdTeam(match))) return;
+    if (Date.now() - lastTeamSyncRef.current < 5 * 60 * 1000) return;
+
+    lastTeamSyncRef.current = Date.now();
+    let cancelled = false;
+
+    async function syncKnockoutTeams() {
+      try {
+        const updates = await getFifaKnockoutTeamUpdates(matches);
+        if (!updates.length || cancelled) return;
+
+        await Promise.all(updates.map((update) => client
+          .from("matches")
+          .update({
+            home_team: update.homeTeam,
+            away_team: update.awayTeam,
+            source: "fifa-api-team-sync",
+            source_updated_at: new Date().toISOString()
+          })
+          .eq("id", update.id)
+        ));
+
+        if (cancelled) return;
+        setMatches((current) => current.map((match) => {
+          const update = updates.find((item) => item.id === match.id);
+          return update ? { ...match, homeTeam: update.homeTeam, awayTeam: update.awayTeam, sourceUpdatedAt: new Date().toISOString() } : match;
+        }));
+      } catch {
+        // Keep the admin manual team editor as the fallback when FIFA data is unavailable.
+      }
+    }
+
+    void syncKnockoutTeams();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [matches]);
+
   async function signIn() {
     if (isDemoMode || !supabase) {
       setActiveUserId(selectedUserId);
       return;
     }
 
-    const email = `${selectedUserId}@jingcai.local`;
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error || !data.user) {
+    if (!APP_PASSCODE || password !== APP_PASSCODE) {
       alert("登录失败，请检查口令。");
       return;
     }
-    const { data: profile } = await supabase.from("profiles").select("id").eq("id", data.user.id).single();
-    setActiveUserId(profile?.id ?? data.user.id);
+    setActiveUserId(selectedUserId);
+    setPassword("");
   }
 
   function toggleMusic() {
@@ -121,14 +212,14 @@ export function App() {
     }
   }
 
-  function lockPick(match: Match, choice: PickChoice) {
+  async function lockPick(match: Match, choice: PickChoice) {
     if (!effectiveUserId) return;
     if (!featuredIds.has(match.id)) return;
     const already = picks.some((pick) => pick.userId === effectiveUserId && pick.matchId === match.id);
     const dayCount = userDailyPickCount(effectiveUserId, picks as Pick[], matches, easternDateKey(match.kickoffAt));
     if (already || !canPick(match) || dayCount >= MAX_DAILY_PICKS) return;
 
-    const pick: Pick = {
+    let pick: Pick = {
       id: crypto.randomUUID(),
       userId: effectiveUserId,
       matchId: match.id,
@@ -137,11 +228,17 @@ export function App() {
     };
 
     if (!isDemoMode && supabase) {
-      void supabase.from("picks").insert({
+      const { data, error } = await supabase.from("picks").insert({
         user_id: effectiveUserId,
         match_id: match.id,
         choice
-      });
+      }).select("*").single();
+
+      if (error) {
+        alert(`保存失败：${error.message}`);
+        return;
+      }
+      if (data) pick = fromPickRow(data);
     }
 
     setPicks((current) => [...current, pick]);
@@ -150,25 +247,37 @@ export function App() {
     window.setTimeout(() => setLastLocked(null), 1600);
   }
 
-  function toggleFeaturedMatch(match: Match) {
-    if (!isCurrentUserAdmin || !effectiveUserId || !canManageTodayFeatured) return;
+  async function toggleFeaturedMatch(match: Match) {
+    if (!isCurrentUserAdmin || !effectiveUserId || !canManageFeaturedMatch(match, now)) return;
     const selected = featuredIds.has(match.id);
     const sameDayFeatured = todayMatches.filter((item) => featuredIds.has(item.id));
     if (!selected && sameDayFeatured.length >= MAX_DAILY_PICKS) return;
 
+    setSavingFeaturedId(match.id);
+
     if (!isDemoMode && supabase) {
-      if (selected) {
-        void supabase.from("featured_matches").delete().eq("match_id", match.id);
-      } else {
-        void supabase.from("featured_matches").insert({
-          match_id: match.id,
-          selected_by: effectiveUserId
-        });
+      const response = selected
+        ? await supabase.from("featured_matches").delete().eq("match_id", match.id)
+        : await persistMatchAndFeature(match, effectiveUserId);
+
+      if (response.error) {
+        setSavingFeaturedId(null);
+        alert(formatSaveError(response.error.message));
+        return;
       }
+
+      const { data: remoteFeatured } = await supabase.from("featured_matches").select("*");
+      if (remoteFeatured) {
+        setFeaturedMatches(remoteFeatured.map(fromFeaturedMatchRow));
+      }
+      setSavingFeaturedId(null);
+      return;
     }
 
     setFeaturedMatches((current) => {
-      if (selected) return current.filter((item) => item.matchId !== match.id);
+      if (selected) {
+        return current.filter((item) => item.matchId !== match.id);
+      }
       return [
         ...current,
         {
@@ -178,9 +287,10 @@ export function App() {
         }
       ];
     });
+    setSavingFeaturedId(null);
   }
 
-  function updateMatchTeams(match: Match) {
+  async function updateMatchTeams(match: Match) {
     if (!isCurrentUserAdmin) return;
     const homeTeam = window.prompt("请输入主队名称", match.homeTeam)?.trim();
     if (!homeTeam) return;
@@ -188,7 +298,7 @@ export function App() {
     if (!awayTeam) return;
 
     if (!isDemoMode && supabase) {
-      void supabase
+      const { error } = await supabase
         .from("matches")
         .update({
           home_team: homeTeam,
@@ -196,6 +306,11 @@ export function App() {
           source_updated_at: new Date().toISOString()
         })
         .eq("id", match.id);
+
+      if (error) {
+        alert(`保存失败：${error.message}`);
+        return;
+      }
     }
 
     setMatches((current) => current.map((item) => (
@@ -205,13 +320,89 @@ export function App() {
     )));
   }
 
+  async function updateMatchResult(match: Match) {
+    if (!isCurrentUserAdmin || !canRecordResult(match, now)) return;
+
+    const homeScoreValue = window.prompt(`请输入${match.homeTeam}进球数`, match.homeScore?.toString() ?? "");
+    if (homeScoreValue === null) return;
+    const awayScoreValue = window.prompt(`请输入${match.awayTeam}进球数`, match.awayScore?.toString() ?? "");
+    if (awayScoreValue === null) return;
+
+    const homeScore = Number(homeScoreValue);
+    const awayScore = Number(awayScoreValue);
+    if (!Number.isInteger(homeScore) || !Number.isInteger(awayScore) || homeScore < 0 || awayScore < 0) {
+      alert("比分必须是 0 或更大的整数。");
+      return;
+    }
+
+    const allowedChoices = choicesForMatch(match);
+    const resultInput = window.prompt(
+      `请选择赛果：${allowedChoices.map(choiceLabel).join(" / ")}`,
+      homeScore > awayScore ? "主胜" : homeScore < awayScore ? "客胜" : "平"
+    )?.trim();
+    if (!resultInput) return;
+
+    const winner = allowedChoices.find((choice) => {
+      const labels = choice === "home" ? ["主胜", "主", "home", match.homeTeam] : choice === "away" ? ["客胜", "客", "away", match.awayTeam] : ["平", "平局", "draw"];
+      return labels.some((label) => label.toLowerCase() === resultInput.toLowerCase());
+    });
+
+    if (!winner) {
+      alert(`赛果只能选择：${allowedChoices.map(choiceLabel).join(" / ")}`);
+      return;
+    }
+
+    setSavingResultId(match.id);
+
+    const updatedMatch: Match = {
+      ...match,
+      homeScore,
+      awayScore,
+      status: "finished",
+      winner,
+      sourceUpdatedAt: new Date().toISOString()
+    };
+
+    if (!isDemoMode && supabase) {
+      const { error } = await supabase
+        .from("matches")
+        .update({
+          home_score: homeScore,
+          away_score: awayScore,
+          status: "finished",
+          winner,
+          source: "manual-admin",
+          source_updated_at: updatedMatch.sourceUpdatedAt
+        })
+        .eq("id", match.id);
+
+      if (error) {
+        setSavingResultId(null);
+        alert(`保存失败：${error.message}`);
+        return;
+      }
+    }
+
+    setMatches((current) => current.map((item) => (item.id === match.id ? updatedMatch : item)));
+    setSavingResultId(null);
+  }
+
   return (
     <main className="shell">
-      <audio ref={audioRef} src="/audio/dai-dai.m4a" loop preload="none" />
+      <audio ref={audioRef} src="/audio/dai-dai.m4a" loop preload="auto" autoPlay />
       <audio ref={lockAudioRef} src="/audio/lock.mp3" preload="none" />
 
       <section className="hero">
-        <img src={heroMatch} alt="" className="heroImage" />
+        <img
+          src="/worldcup-core-visual.png"
+          alt=""
+          className="heroImage"
+          loading="eager"
+          decoding="async"
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
         <div className="heroOverlay" />
         <div className="topBar">
           <div>
@@ -239,14 +430,33 @@ export function App() {
           value={selectedUserId}
           onChange={(event) => {
             setSelectedUserId(event.target.value);
-            if (isDemoMode) setActiveUserId(event.target.value);
+            setPassword("");
+            if (isDemoMode) {
+              setActiveUserId(event.target.value);
+            } else {
+              setActiveUserId(null);
+            }
           }}
         >
-          {FRIENDS.map((friend) => (
+          {friends.map((friend) => (
             <option value={friend.id} key={friend.id}>{friend.displayName}{friend.isAdmin ? "（管理员）" : ""}</option>
           ))}
         </select>
-        {!isDemoMode ? (
+        {!isDemoMode && selectedUserLoggedIn ? (
+          <div className="loginStatus">
+            <span>已登录为 {selectedLoginUser.displayName}{selectedLoginUser.isAdmin ? " · 管理员" : ""}</span>
+            <button
+              className="secondaryButton"
+              onClick={() => {
+                setActiveUserId(null);
+                setPassword("");
+              }}
+            >
+              切换用户
+            </button>
+          </div>
+        ) : null}
+        {!isDemoMode && !selectedUserLoggedIn ? (
           <>
             <label htmlFor="password">口令</label>
             <input id="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
@@ -283,12 +493,9 @@ export function App() {
           </div>
           <span className="pill">{todayFeaturedCount}/2 场竞猜</span>
         </div>
-        {isCurrentUserAdmin && !canManageTodayFeatured ? (
-          <p className="muted deadlineNote">本比赛日第一场已经开赛，管理员不能再调整竞猜场次。</p>
+        {isCurrentUserAdmin && !todayMatches.some((match) => canManageFeaturedMatch(match, now)) ? (
+          <p className="muted deadlineNote">本比赛日剩余比赛均已开赛，管理员不能再调整竞猜场次。</p>
         ) : null}
-        <a className="sourceLink" href={FIFA_SCORES_FIXTURES_URL} target="_blank" rel="noreferrer">
-          赛程与比赛日以 FIFA 官方页面为准
-        </a>
         <div className="matchList">
           {todayMatches.map((match) => (
               <MatchCard
@@ -300,12 +507,15 @@ export function App() {
               selectedForPick={featuredIds.has(match.id)}
               isAdmin={isCurrentUserAdmin}
               canFeatureMore={todayFeaturedCount < MAX_DAILY_PICKS}
-              canManageFeatured={canManageTodayFeatured}
+              canManageFeatured={canManageFeaturedMatch(match, now)}
+              savingFeatured={savingFeaturedId === match.id}
+              savingResult={savingResultId === match.id}
               dailyFull={todayPickCount >= MAX_DAILY_PICKS}
               justLocked={lastLocked === match.id}
               onPick={lockPick}
               onToggleFeatured={toggleFeaturedMatch}
               onUpdateTeams={updateMatchTeams}
+              onUpdateResult={updateMatchResult}
             />
           ))}
         </div>
@@ -322,7 +532,16 @@ export function App() {
         {previousDay ? (
           <div className="matchList">
             {previousDay.matches.map((match) => (
-              <ResultCard key={match.id} match={match} picks={picks as Pick[]} friends={friends} />
+              <ResultCard
+                key={match.id}
+                match={match}
+                picks={picks as Pick[]}
+                friends={friends}
+                isAdmin={isCurrentUserAdmin}
+                canEditResult={canRecordResult(match, now)}
+                savingResult={savingResultId === match.id}
+                onUpdateResult={updateMatchResult}
+              />
             ))}
           </div>
         ) : (
@@ -342,11 +561,14 @@ function MatchCard({
   isAdmin,
   canFeatureMore,
   canManageFeatured,
+  savingFeatured,
+  savingResult,
   dailyFull,
   justLocked,
   onPick,
   onToggleFeatured,
-  onUpdateTeams
+  onUpdateTeams,
+  onUpdateResult
 }: {
   match: Match;
   friends: Friend[];
@@ -356,11 +578,14 @@ function MatchCard({
   isAdmin: boolean;
   canFeatureMore: boolean;
   canManageFeatured: boolean;
+  savingFeatured: boolean;
+  savingResult: boolean;
   dailyFull: boolean;
   justLocked: boolean;
   onPick: (match: Match, choice: PickChoice) => void;
   onToggleFeatured: (match: Match) => void;
   onUpdateTeams: (match: Match) => void;
+  onUpdateResult: (match: Match) => void;
 }) {
   const userPick = picks.find((pick) => pick.userId === selectedUserId && pick.matchId === match.id);
   const locked = Boolean(userPick);
@@ -382,15 +607,24 @@ function MatchCard({
           <div className="adminActions">
             <button
               className={selectedForPick ? "adminToggle active" : "adminToggle"}
-              disabled={!canManageFeatured || (!selectedForPick && !canFeatureMore)}
+              disabled={savingFeatured || !canManageFeatured || (!selectedForPick && !canFeatureMore)}
               onClick={() => onToggleFeatured(match)}
             >
               <ShieldCheck size={15} />
-              {selectedForPick ? "取消竞猜" : "设为竞猜"}
+              {savingFeatured ? "保存中" : selectedForPick ? "取消竞猜" : "设为竞猜"}
             </button>
             {hasTbdTeam(match) ? (
               <button className="adminToggle" onClick={() => onUpdateTeams(match)}>
                 更新球队
+              </button>
+            ) : null}
+            {canRecordResult(match) ? (
+              <button
+                className="adminToggle resultButton"
+                disabled={savingResult}
+                onClick={() => onUpdateResult(match)}
+              >
+                {savingResult ? "保存中" : match.status === "finished" ? "修改赛果" : "录入赛果"}
               </button>
             ) : null}
           </div>
@@ -423,7 +657,23 @@ function MatchCard({
   );
 }
 
-function ResultCard({ match, picks, friends }: { match: Match; picks: Pick[]; friends: Friend[] }) {
+function ResultCard({
+  match,
+  picks,
+  friends,
+  isAdmin,
+  canEditResult,
+  savingResult,
+  onUpdateResult
+}: {
+  match: Match;
+  picks: Pick[];
+  friends: Friend[];
+  isAdmin?: boolean;
+  canEditResult?: boolean;
+  savingResult?: boolean;
+  onUpdateResult?: (match: Match) => void;
+}) {
   return (
     <article className="matchCard result">
       <div className="matchMeta">
@@ -437,6 +687,15 @@ function ResultCard({ match, picks, friends }: { match: Match; picks: Pick[]; fr
         <b>{match.homeScore ?? "-"} : {match.awayScore ?? "-"}</b>
         <strong>{match.awayTeam}</strong>
       </div>
+      {isAdmin && canEditResult && onUpdateResult ? (
+        <button
+          className="adminToggle resultButton resultEdit"
+          disabled={savingResult}
+          onClick={() => onUpdateResult(match)}
+        >
+          {savingResult ? "保存中" : match.status === "finished" ? "修改赛果" : "录入赛果"}
+        </button>
+      ) : null}
       <PickStrip matchId={match.id} picks={picks} friends={friends} winner={match.winner} />
     </article>
   );
@@ -478,6 +737,48 @@ function fromMatchRow(row: Record<string, unknown>): Match {
     winner: row.winner as Match["winner"],
     sourceUpdatedAt: row.source_updated_at ? String(row.source_updated_at) : null
   };
+}
+
+function mergeMatchesWithFallback(remoteMatches: Match[]) {
+  const byId = new Map(DEMO_MATCHES.map((match) => [match.id, match]));
+  for (const match of remoteMatches) byId.set(match.id, match);
+  return Array.from(byId.values()).sort((a, b) => new Date(a.kickoffAt).getTime() - new Date(b.kickoffAt).getTime());
+}
+
+async function persistMatchAndFeature(match: Match, selectedBy: string) {
+  if (!supabase) return { error: null };
+
+  const matchResponse = await supabase
+    .from("matches")
+    .upsert({
+      id: match.id,
+      match_no: match.matchNo,
+      phase: match.phase,
+      kickoff_at: match.kickoffAt,
+      venue: match.venue,
+      home_team: match.homeTeam,
+      away_team: match.awayTeam,
+      home_score: match.homeScore,
+      away_score: match.awayScore,
+      status: match.status,
+      winner: match.winner,
+      source: "manual-admin",
+      source_updated_at: new Date().toISOString()
+    }, { onConflict: "id" });
+
+  if (matchResponse.error) return matchResponse;
+
+  return supabase.from("featured_matches").insert({
+    match_id: match.id,
+    selected_by: selectedBy
+  });
+}
+
+function formatSaveError(message: string) {
+  if (/row-level security|violates foreign key|not present in table/i.test(message)) {
+    return "保存失败：数据库还没有允许写入新的比赛日赛程。请先在 Supabase SQL Editor 运行项目里的 supabase/enable-app-passcode-access.sql，然后再点设为竞猜。";
+  }
+  return `保存失败：${message}`;
 }
 
 function fromPickRow(row: Record<string, unknown>): Pick {

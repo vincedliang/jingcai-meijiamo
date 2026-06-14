@@ -17,6 +17,11 @@ export function choicesForMatch(match: Match): PickChoice[] {
   return match.phase === "group" ? ["home", "draw", "away"] : ["home", "away"];
 }
 
+export function canRecordResult(match: Match, now = new Date()) {
+  const earliestResultTime = new Date(match.kickoffAt).getTime() + 2 * 60 * 60 * 1000;
+  return now.getTime() >= earliestResultTime;
+}
+
 export function hasTbdTeam(match: Match) {
   return [match.homeTeam, match.awayTeam].some((team) => /待定|TBD|to be determined/i.test(team));
 }
@@ -121,29 +126,37 @@ export function getDayNumber(matches: Match[], date = new Date()) {
   return Math.min(Math.max(before + 1, 1), days.length);
 }
 
-export function getTodayMatches(matches: Match[], date = new Date()) {
+export function getTodayMatches(matches: Match[], date = new Date(), featuredMatchIds?: ReadonlySet<string>) {
   const key = easternDateKey(date);
   const sameDay = matches.filter((match) => easternDateKey(match.kickoffAt) === key);
-  if (sameDay.length) return sameDay;
-  const nextScheduled = matches.find((match) => match.status === "scheduled");
+  const sameDayFeatured = featuredMatchIds ? sameDay.filter((match) => featuredMatchIds.has(match.id)) : [];
+  const requiredResults = sameDayFeatured.length ? sameDayFeatured : sameDay;
+  if (sameDay.length && requiredResults.some((match) => match.status !== "finished")) return sameDay;
+
+  const nextScheduled = matches.find((match) => easternDateKey(match.kickoffAt) > key && match.status !== "finished")
+    ?? matches.find((match) => match.status !== "finished");
   if (!nextScheduled) return [];
   const nextKey = easternDateKey(nextScheduled.kickoffAt);
   return matches.filter((match) => easternDateKey(match.kickoffAt) === nextKey);
 }
 
-export function getCurrentMatchDateKey(matches: Match[], date = new Date()) {
-  const todayMatches = getTodayMatches(matches, date);
+export function getCurrentMatchDateKey(matches: Match[], date = new Date(), featuredMatchIds?: ReadonlySet<string>) {
+  const todayMatches = getTodayMatches(matches, date, featuredMatchIds);
   return easternDateKey(todayMatches[0]?.kickoffAt ?? date);
 }
 
-export function getPreviousMatchDay(matches: Match[], date = new Date()) {
-  const key = easternDateKey(date);
-  const previous = getTournamentDays(matches).filter((day) => day < key).pop();
+export function getPreviousMatchDay(matches: Match[], date = new Date(), featuredMatchIds?: ReadonlySet<string>) {
+  const activeKey = getCurrentMatchDateKey(matches, date, featuredMatchIds);
+  const previous = getTournamentDays(matches).filter((day) => day < activeKey).pop();
   if (!previous) return null;
+  const previousMatches = matches.filter((match) => easternDateKey(match.kickoffAt) === previous);
+  const resultMatches = featuredMatchIds
+    ? previousMatches.filter((match) => featuredMatchIds.has(match.id) || match.status === "finished")
+    : previousMatches;
   return {
     dateKey: previous,
     dayNo: getTournamentDays(matches).indexOf(previous) + 1,
-    matches: matches.filter((match) => easternDateKey(match.kickoffAt) === previous)
+    matches: resultMatches
   };
 }
 
@@ -152,8 +165,10 @@ export function userDailyPickCount(userId: string, picks: Pick[], matches: Match
   return picks.filter((pick) => pick.userId === userId && matchIds.has(pick.matchId)).length;
 }
 
+export function canManageFeaturedMatch(match: Match, now = new Date()) {
+  return match.status === "scheduled" && now.getTime() < new Date(match.kickoffAt).getTime();
+}
+
 export function canManageFeaturedMatches(matchesForDay: Match[], now = new Date()) {
-  if (!matchesForDay.length) return false;
-  const firstKickoff = Math.min(...matchesForDay.map((match) => new Date(match.kickoffAt).getTime()));
-  return now.getTime() < firstKickoff;
+  return matchesForDay.some((match) => canManageFeaturedMatch(match, now));
 }

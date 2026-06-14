@@ -13,7 +13,7 @@ export const DEMO_MATCHES: Match[] = [
     awayScore: null,
     status: "scheduled",
     winner: null,
-    sourceUpdatedAt: "FIFA official scores-fixtures reference"
+    sourceUpdatedAt: "manual result entry"
   },
   {
     id: "m002",
@@ -27,7 +27,7 @@ export const DEMO_MATCHES: Match[] = [
     awayScore: null,
     status: "scheduled",
     winner: null,
-    sourceUpdatedAt: "FIFA official scores-fixtures reference"
+    sourceUpdatedAt: "manual result entry"
   },
   {
     id: "m003",
@@ -41,7 +41,7 @@ export const DEMO_MATCHES: Match[] = [
     awayScore: null,
     status: "scheduled",
     winner: null,
-    sourceUpdatedAt: "FIFA official scores-fixtures reference"
+    sourceUpdatedAt: "manual result entry"
   },
   {
     id: "m004",
@@ -55,7 +55,7 @@ export const DEMO_MATCHES: Match[] = [
     awayScore: null,
     status: "scheduled",
     winner: null,
-    sourceUpdatedAt: "FIFA official scores-fixtures reference"
+    sourceUpdatedAt: "manual result entry"
   },
   {
     id: "m005",
@@ -69,7 +69,7 @@ export const DEMO_MATCHES: Match[] = [
     awayScore: null,
     status: "scheduled",
     winner: null,
-    sourceUpdatedAt: "FIFA official scores-fixtures reference"
+    sourceUpdatedAt: "manual result entry"
   }
 ];
 

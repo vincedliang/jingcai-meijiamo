@@ -4,3 +4,7 @@ dist/
 .DS_Store
 .vercel/
 .supabase/
+.netlify/
+china-deploy-package/
+release/
+*.zip
